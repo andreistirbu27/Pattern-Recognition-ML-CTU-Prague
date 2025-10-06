@@ -25,8 +25,34 @@ def matrix_manip(A, B):
 
     """
 
-    raise NotImplementedError("You have to implement this function.")
-    output = None
+    output = dict()
+
+    output['A_transpose'] = A.T
+
+    output['A_3rd_col'] = A[:, 2:3]
+
+    output['A_slice'] = A[-2:, -3:]
+
+    A_gr_inc = A.copy()
+    A_gr_inc[A_gr_inc > 3] += 1
+    ones_col = np.ones((A_gr_inc.shape[0], 1), dtype=A.dtype)
+    output['A_gr_inc'] = np.hstack((A_gr_inc, ones_col))
+
+    output['C'] = output['A_gr_inc'] @ output['A_gr_inc'].T
+
+    col_sums = np.sum(output['A_gr_inc'], axis=0)
+    weights = np.arange(1, col_sums.shape[0] + 1)
+    weighted_sum = np.sum(weights * col_sums)
+    output['A_weighted_col_sum'] = float(weighted_sum)
+
+    substract = np.array([[4], [6]])
+    output['D'] = B - substract
+
+    col_lengths = np.linalg.norm(output['D'], axis=0)
+    avg_length = np.mean(col_lengths)
+    mask = col_lengths > avg_length
+    output['D_select'] = output['D'][:, mask]
+
     return output
 
 
@@ -42,9 +68,12 @@ def compute_letter_mean(letter_char, alphabet, images, labels):
     :param labels:       image labels, np.array of size (n_images, ) (index into alphabet array)
     :return:             mean of all images of the letter_char, (H, W) np.uint8 dtype (round, then convert)
     """
-    raise NotImplementedError("You have to implement this function.")
-    letter_mean = None
-    return letter_mean
+
+    letter_idx = np.where(alphabet == letter_char)[0][0]         # index of this letter in alphabet
+    img_idx = np.where(labels == letter_idx)[0]             # indices of images that correspond to this letter
+    letter_imgs = images[..., img_idx]                      # extract those images (shape: 10, 10, k)
+    mean_img = np.mean(letter_imgs, axis=-1)                # mean across the last axis (the k images)
+    return np.rint(mean_img).astype(np.uint8)               # round and convert to uint8
 
 
 def compute_lr_features(letter_char, alphabet, images, labels):
@@ -61,8 +90,18 @@ def compute_lr_features(letter_char, alphabet, images, labels):
     :return:                           features for all occurrences of specific :param letter_char:, np.array of shape (n_letter_occurrences, )
     """
 
-    raise NotImplementedError("You have to implement this function.")
-    return lr_features
+    letter_idx = np.where(alphabet == letter_char)[0][0]
+    img_idx = np.where(labels == letter_idx)[0]  # (K,)
+    imgs = images[..., img_idx]  # (H, W, K)
+
+    H, W = imgs.shape[:2]
+    mid = W // 2
+
+    # sums per image (over H and W/2). use signed dtype for subtraction
+    sum_left = imgs[:, :mid, :].sum(axis=(0, 1), dtype=np.int32)  # (K,)
+    sum_right = imgs[:, mid:, :].sum(axis=(0, 1), dtype=np.int32)  # (K,)
+
+    return sum_left - sum_right
 
 
 ################################################################################
