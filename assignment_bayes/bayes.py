@@ -24,6 +24,7 @@ def bayes_risk_discrete(discrete_A, discrete_B, W, q):
     """
     raise NotImplementedError("You have to implement this function.")
     R = None
+    
     return R
 
 
