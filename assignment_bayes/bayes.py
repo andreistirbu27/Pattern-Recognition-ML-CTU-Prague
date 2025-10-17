@@ -27,7 +27,7 @@ def bayes_risk_discrete(discrete_A, discrete_B, W, q):
     R = 0.0
 
     for i, decision in enumerate(q):
-        R += (pA * PxA[i] * W[decision, 0]) + (pB * PxB[i] * W[decision, 1])
+        R += (pA * PxA[i] * W[0, decision]) + (pB * PxB[i] * W[1, decision])
 
     return R
 
