@@ -49,8 +49,8 @@ def find_strategy_discrete(discrete_A, discrete_B, W):
     pA, pB = discrete_A['Prior'], discrete_B['Prior']
     pxA, pxB = discrete_A['Prob'], discrete_B['Prob']  # shape (n,)
 
-    R_decide_A = pA * pxA * W[0, 0] + pB * pxB * W[0, 1]
-    R_decide_B = pA * pxA * W[1, 0] + pB * pxB * W[1, 1]
+    R_decide_A = pA * pxA * W[0, 0] + pB * pxB * W[1, 0]
+    R_decide_B = pA * pxA * W[0, 1] + pB * pxB * W[1, 1]
 
     q = np.zeros_like(R_decide_A, dtype=int)
     for i in range(len(R_decide_A)):
