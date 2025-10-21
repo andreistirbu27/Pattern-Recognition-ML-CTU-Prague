@@ -27,7 +27,30 @@ def minimax_strategy_discrete(distribution1, distribution2):
     """
 
     raise NotImplementedError("You have to implement this function.")
-    q, opt_i, eps1, eps2 = None, None, None, None
+
+    p1 = D1.flatten()
+    p2 = D2.flatten()
+
+    r = np.divide(p1, p2, out=np.full_like(p1, np.nan), where=(p2 != 0))
+
+    idx = np.argsort(r)
+    p1_sorted = p1[idx]
+    p2_sorted = p2[idx]
+
+    N = len(r)
+
+    eps1 = np.zeros(N + 1)
+    eps2 = np.zeros(N + 1)
+
+    for i in range(N + 1):
+        eps1[i] = np.sum(p1_sorted[:i])
+        eps2[i] = np.sum(p2_sorted[i:])
+
+    opt_i = np.argmin(np.maximum(eps1, eps2))
+
+    q_flat = np.ones(N, dtype=int)
+    q_flat[idx[opt_i:]] = 0
+    q = q_flat.reshape(D1.shape)
 
     return q, opt_i, eps1, eps2
 
@@ -42,11 +65,48 @@ def classify_discrete(imgs, q):
     :param q:       strategy (21, 21) np array of 0 or 1
     :return:        image labels, (n, ) np array of 0 or 1
     """
+    arr = np.asarray(measurements_xy)
 
-    raise NotImplementedError("You have to implement this function.")
-    labels = None
+    # --- Case A: already (N, 2) discrete measurements ---
+    if arr.ndim == 2 and arr.shape[1] == 2:
+        xy = arr
 
-    return labels
+    else:
+        # --- Case B: images; convert to (H, W, N) for measurement funcs ---
+        imgs = arr
+
+        # squeeze trailing singleton channel if present
+        if imgs.ndim == 4 and imgs.shape[-1] == 1:
+            imgs = imgs[..., 0]  # -> (N,H,W) or (H,W,N)
+
+        if imgs.ndim != 3:
+            raise ValueError(f"Unsupported images shape: {arr.shape}. Expect (H,W,N) or (N,H,W)[,1].")
+
+        # If it's (N,H,W), transpose to (H,W,N). Heuristic: if first dim looks like N, transpose.
+        if imgs.shape[0] >= 8 and imgs.shape[0] > max(imgs.shape[1], imgs.shape[2]):
+            imgs = np.transpose(imgs, (1, 2, 0))  # -> (H,W,N)
+
+        # Now imgs is (H, W, N). Compute discrete measurements using provided helpers.
+        try:
+            x_meas = compute_measurement_lr_discrete(imgs)  # shape (N,)
+            y_meas = compute_measurement_ul_discrete(imgs)  # shape (N,)
+        except NameError as e:
+            raise NameError(
+                "Measurement functions not found. Make sure compute_measurement_lr_discrete "
+                "and compute_measurement_ul_discrete are defined/imported."
+            ) from e
+
+        xy = np.stack([x_meas, y_meas], axis=1)  # (N,2)
+
+    # --- Map (x,y) in [-10,10] to q indices and predict ---
+    x = np.rint(xy[:, 0]).astype(int)
+    y = np.rint(xy[:, 1]).astype(int)
+
+    xi = np.clip(x + 10, 0, q.shape[0] - 1)  # rows: X
+    yi = np.clip(y + 10, 0, q.shape[1] - 1)  # cols: Y
+
+    preds = q[xi, yi].astype(int)
+    return preds
 
 
 def worst_risk_cont(distribution_A, distribution_B, true_A_prior):
@@ -59,9 +119,28 @@ def worst_risk_cont(distribution_A, distribution_B, true_A_prior):
     :param true_A_prior:            true A prior probability - python float
     :return worst_risk:             worst possible bayesian risk when evaluated with different prior
     """
-    raise NotImplementedError("You have to implement this function.")
-    worst_risk = 42
-    return worst_risk
+    D1['Prior'] = p1
+    D2['Prior'] = 1 - p1
+
+    q = find_strategy_2normal(D1, D2)
+    r = bayes_risk_2normal(D1, D2, q)
+
+    mu1, s1 = D1['Mean'], D1['Sigma']
+    mu2, s2 = D2['Mean'], D2['Sigma']
+    t1, t2 = q['t1'], q['t2']
+    d = q['decision']
+
+    from scipy.stats import norm
+
+    if d[1] == 1:
+        eps1 = norm.cdf(t1, mu1, s1) + (1 - norm.cdf(t2, mu1, s1))
+        eps2 = 1 - (norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2))
+    else:
+        eps1 = 1 - (norm.cdf(t2, mu1, s1) - norm.cdf(t1, mu1, s1))
+        eps2 = norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2)
+
+    worst_r = max(eps1, eps2)
+    return worst_r
 
 
 def minimax_strategy_cont(distribution_A, distribution_B):
@@ -78,9 +157,28 @@ def minimax_strategy_cont(distribution_A, distribution_B):
                                q['decision'] - (3, ) np.int32 np.array decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
     :return worst_risk      worst risk of the minimax strategy q - python float
     """
-    raise NotImplementedError("You have to implement this function.")
-    q, worst_risk = None, None
-    return q, worst_risk
+    def objective(p):
+        p = float(p)
+        D1c['Prior'] = p
+        D2c['Prior'] = 1.0 - p
+        q = find_strategy_2normal(D1c, D2c)
+        eps1, eps2 = _class_errors_2normal(D1c, D2c, q)
+        return max(eps1, eps2)
+
+    p_opt = fminbound(objective, 1e-9, 1.0 - 1e-9)
+
+    D1c['Prior'] = float(p_opt)
+    D2c['Prior'] = 1.0 - float(p_opt)
+    q_minimax = find_strategy_2normal(D1c, D2c)
+
+    eps1, eps2 = _class_errors_2normal(D1c, D2c, q_minimax)
+    risk_minimax = max(eps1, eps2)
+
+    q_minimax['decision'] = np.asarray(q_minimax['decision'], dtype=np.int32)
+    q_minimax['t1'] = float(q_minimax['t1'])
+    q_minimax['t2'] = float(q_minimax['t2'])
+
+    return q_minimax, float(risk_minimax)
 
 
 def risk_fix_q_cont(distribution_A, distribution_B, distribution_A_priors, q):
@@ -96,9 +194,24 @@ def risk_fix_q_cont(distribution_A, distribution_B, distribution_A_priors, q):
                                        q['decision'] - (3, ) np.int32 np.array decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
     :return risks:                  bayesian risk of the strategy q with varying priors (n, ) np.array
     """
-    raise NotImplementedError("You have to implement this function.")
-    risks = None
-    return risks
+    mu1, s1 = D1["Mean"], D1["Sigma"]
+    mu2, s2 = D2["Mean"], D2["Sigma"]
+
+    t1, t2 = q_fix["t1"], q_fix["t2"]
+    d = q_fix["decision"]
+
+    if d[1] == 1:
+        err1 = norm.cdf(t1, mu1, s1) + (1 - norm.cdf(t2, mu1, s1))
+    else:
+        err1 = 1 - (norm.cdf(t2, mu1, s1) - norm.cdf(t1, mu1, s1))
+
+    if d[1] == 1:
+        err2 = 1 - (norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2))
+    else:
+        err2 = norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2)
+
+    risk = priors_1 * err1 + (1 - priors_1) * err2
+    return risk
 
 
 ################################################################################
@@ -117,9 +230,7 @@ def classification_error(predictions, labels):
     :return:            error - classification error ~ a fraction of predictions being incorrect
                         python float in range <0, 1>
     """
-    raise NotImplementedError("You have to implement this function.")
-    error = None
-    return error
+    return np.mean(predictions != labels)
 
 
 def find_strategy_2normal(distribution_A, distribution_B):
@@ -138,8 +249,69 @@ def find_strategy_2normal(distribution_A, distribution_B):
                                If there is only one threshold, q['t1'] should be equal to q['t2'] and the middle decision should be 0
                                If there is no threshold, q['t1'] and q['t2'] should be -/+ infinity and all the decision values should be the same (0 preferred)
     """
-    raise NotImplementedError("You have to implement this function.")
-    q = None
+    s_A = distribution_A['Sigma']
+    m_A = distribution_A['Mean']
+    p_A = distribution_A['Prior']
+    s_B = distribution_B['Sigma']
+    m_B = distribution_B['Mean']
+    p_B = distribution_B['Prior']
+
+    q = {}
+
+    # extreme priors
+    eps = 1e-10
+    if p_A < eps:
+        q['t1'], q['t2'] = -np.inf, np.inf
+        q['decision'] = np.array([1, 1, 1], dtype=np.int32)
+    elif p_B < eps:
+        q['t1'], q['t2'] = -np.inf, np.inf
+        q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+    else:
+        a = 1 / (2 * s_B ** 2) - 1 / (2 * s_A ** 2)
+        b = m_A / (s_A ** 2) - m_B / (s_B ** 2)
+        c = (m_B ** 2) / (2 * s_B ** 2) - (m_A ** 2) / (2 * s_A ** 2) + np.log((p_A * s_B) / (p_B * s_A))
+        if a == 0:
+            # same sigmas -> not quadratic
+            if b == 0:
+                # same sigmas and same means -> not even linear
+                if c >= 0:
+                    q['t1'], q['t2'] = -np.inf, np.inf
+                    q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+                else:
+                    q['t1'], q['t2'] = -np.inf, np.inf
+                    q['decision'] = np.array([1, 1, 1], dtype=np.int32)
+            else:
+                # same sigmas, different means -> linear equation
+                t = -c / b
+                q['t1'], q['t2'] = t, t
+                if b > 0:
+                    q['decision'] = np.array([1, 0, 1], dtype=np.int32)
+                else:
+                    q['decision'] = np.array([0, 1, 0], dtype=np.int32)
+        else:
+            # quadratic equation
+            D = b ** 2 - 4 * a * c
+            if D > 0:
+                roots = np.sort(np.roots([a, b, c]))
+                t1, t2 = roots[0], roots[1]
+                q['t1'], q['t2'] = t1, t2
+                if a > 0:
+                    q['decision'] = np.array([0, 1, 0], dtype=np.int32)
+                else:
+                    q['decision'] = np.array([1, 0, 1], dtype=np.int32)
+            elif D == 0:
+                t = -b / (2 * a)
+                q['t1'], q['t2'] = t, t
+                if a > 0:
+                    q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+                else:
+                    q['decision'] = np.array([1, 1, 1], dtype=np.int32)
+            elif D < 0:
+                q['t1'], q['t2'] = -np.inf, np.inf
+                if a > 0:
+                    q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+                else:
+                    q['decision'] = np.array([1, 1, 1], dtype=np.int32)
 
     return q
 
@@ -158,8 +330,25 @@ def bayes_risk_2normal(distribution_A, distribution_B, q):
                                q['decision'] - (3, ) np.int32 np.array 0/1 decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
     :return:    R - bayesian risk, python float
     """
-    raise NotImplementedError("You have to implement this function.")
-    R = None
+    muA, sigmaA, pA = distribution_A['Mean'], distribution_A['Sigma'], distribution_A['Prior']
+    muC, sigmaC, pC = distribution_B['Mean'], distribution_B['Sigma'], distribution_B['Prior']
+
+    t1, t2 = q['t1'], q['t2']
+    decisions = q['decision']
+
+    def integrate_region(decision, left, right):
+        if decision == 0:
+            return pA * (norm.cdf((right - muA) / sigmaA) -
+                         norm.cdf((left - muA) / sigmaA))
+        else:
+            return pC * (norm.cdf((right - muC) / sigmaC) -
+                         norm.cdf((left - muC) / sigmaC))
+
+    I1 = integrate_region(decisions[0], -np.inf, t1)
+    I2 = integrate_region(decisions[1], t1, t2)
+    I3 = integrate_region(decisions[2], t2, np.inf)
+
+    R = 1 - (I1 + I2 + I3)
     return R
 
 
@@ -175,9 +364,17 @@ def classify_2normal(measurements, q):
                     q['decision'] - (3, ) int32 np.array decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
     :return:        label - classification labels, int32 np.array (n, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    label = None
-    return label
+    t1, t2 = q['t1'], q['t2']
+    d1, d2, d3 = q['decision']  # decisions per interval
+
+    x = np.asarray(measurements)
+
+    # vectorized interval selection
+    labels = np.empty_like(x, dtype=int)
+    labels[x < t1] = d1
+    labels[(x >= t1) & (x < t2)] = d2
+    labels[x >= t2] = d3
+    return labels
 
 
 ################################################################################
