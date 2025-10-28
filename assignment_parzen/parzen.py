@@ -18,9 +18,11 @@ def parzen(x, x_trn, h):
     :param h:       kernel bandwidth, python float
     :return p:      estimated p(x|k) evaluated at values given by x (n,) np array
     """
-
-    raise NotImplementedError("You have to implement this function.")
-    p = None
+    n = len(x_trn)
+    # compute kernel values for all combinations of x and training samples
+    K = norm.pdf((x[:, None] - x_trn[None, :]) / h) / h
+    # average over training samples
+    p = np.mean(K, axis=1)
     return p
 
 
@@ -37,10 +39,11 @@ def compute_Lh(itrn, itst, x, h):
     :param h:       kernel bandwidth, python float
     :return Lh:     average log-likelihood over training/test splits, python float
     """
-
-    raise NotImplementedError("You have to implement this function.")
-    Lh = None
-    return Lh
+    ll = 0.0
+    for tr_idx, te_idx in zip(itrn, itst):
+        p = parzen(x[te_idx], x[tr_idx], h)
+        ll += np.sum(np.log(p + eps))
+    return ll / len(itrn)
 
 
 def classify_bayes_parzen(x_test, xA, xC, pA, pC, h_bestA, h_bestC):
@@ -59,9 +62,11 @@ def classify_bayes_parzen(x_test, xA, xC, pA, pC, h_bestA, h_bestC):
     :param h_bestC: optimal value of the kernel bandwidth, python float
     :return labels: classification labels for x_test (n,) np array
     """
-
-    raise NotImplementedError("You have to implement this function.")
-    labels = None
+    p_x_A = parzen(x_test, xA, h_bestA)
+    p_x_C = parzen(x_test, xC, h_bestC)
+    logA = np.log(p_x_A + 1e-300) + np.log(pA)
+    logC = np.log(p_x_C + 1e-300) + np.log(pC)
+    labels = (logC > logA).astype(int)  # 0=A, 1=C
     return labels
 
 
