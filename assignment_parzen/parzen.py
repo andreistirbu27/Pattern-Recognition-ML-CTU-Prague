@@ -26,7 +26,7 @@ def parzen(x, x_trn, h):
     return p
 
 
-def compute_Lh(itrn, itst, x, h):
+def compute_Lh(itrn, itst, x, h, eps=1e-300):
     """
     Lh = compute_Lh(itrn, itst, x, h)
 
