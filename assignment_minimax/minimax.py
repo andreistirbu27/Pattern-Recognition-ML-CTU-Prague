@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import matplotlib.patches as mpatches
 from scipy.stats import norm
+from scipy.optimize import fminbound
 import copy
 
 import scipy.optimize as opt
@@ -28,8 +29,8 @@ def minimax_strategy_discrete(distribution1, distribution2):
 
     raise NotImplementedError("You have to implement this function.")
 
-    p1 = D1.flatten()
-    p2 = D2.flatten()
+    p1 = distribution1.flatten()
+    p2 = distribution2.flatten()
 
     r = np.divide(p1, p2, out=np.full_like(p1, np.nan), where=(p2 != 0))
 
@@ -65,7 +66,7 @@ def classify_discrete(imgs, q):
     :param q:       strategy (21, 21) np array of 0 or 1
     :return:        image labels, (n, ) np array of 0 or 1
     """
-    arr = np.asarray(measurements_xy)
+    arr = np.asarray(imgs)
 
     # --- Case A: already (N, 2) discrete measurements ---
     if arr.ndim == 2 and arr.shape[1] == 2:
@@ -119,14 +120,14 @@ def worst_risk_cont(distribution_A, distribution_B, true_A_prior):
     :param true_A_prior:            true A prior probability - python float
     :return worst_risk:             worst possible bayesian risk when evaluated with different prior
     """
-    D1['Prior'] = p1
-    D2['Prior'] = 1 - p1
+    distribution_A['Prior'] = true_A_prior
+    distribution_B['Prior'] = 1 - true_A_prior
 
-    q = find_strategy_2normal(D1, D2)
-    r = bayes_risk_2normal(D1, D2, q)
+    q = find_strategy_2normal(distribution_A, distribution_B)
+    r = bayes_risk_2normal(distribution_A, distribution_B, q)
 
-    mu1, s1 = D1['Mean'], D1['Sigma']
-    mu2, s2 = D2['Mean'], D2['Sigma']
+    mu1, s1 = distribution_A['Mean'], distribution_A['Sigma']
+    mu2, s2 = distribution_B['Mean'], distribution_B['Sigma']
     t1, t2 = q['t1'], q['t2']
     d = q['decision']
 
@@ -159,19 +160,19 @@ def minimax_strategy_cont(distribution_A, distribution_B):
     """
     def objective(p):
         p = float(p)
-        D1c['Prior'] = p
-        D2c['Prior'] = 1.0 - p
-        q = find_strategy_2normal(D1c, D2c)
-        eps1, eps2 = _class_errors_2normal(D1c, D2c, q)
+        distribution_A['Prior'] = p
+        distribution_B['Prior'] = 1.0 - p
+        q = find_strategy_2normal(distribution_A, distribution_B)
+        eps1, eps2 = _class_errors_2normal(distribution_A, distribution_B, q)
         return max(eps1, eps2)
 
     p_opt = fminbound(objective, 1e-9, 1.0 - 1e-9)
 
-    D1c['Prior'] = float(p_opt)
-    D2c['Prior'] = 1.0 - float(p_opt)
-    q_minimax = find_strategy_2normal(D1c, D2c)
+    distribution_A['Prior'] = float(p_opt)
+    distribution_B['Prior'] = 1.0 - float(p_opt)
+    q_minimax = find_strategy_2normal(distribution_A, distribution_B)
 
-    eps1, eps2 = _class_errors_2normal(D1c, D2c, q_minimax)
+    eps1, eps2 = _class_errors_2normal(distribution_A, distribution_B, q_minimax)
     risk_minimax = max(eps1, eps2)
 
     q_minimax['decision'] = np.asarray(q_minimax['decision'], dtype=np.int32)
@@ -179,6 +180,25 @@ def minimax_strategy_cont(distribution_A, distribution_B):
     q_minimax['t2'] = float(q_minimax['t2'])
 
     return q_minimax, float(risk_minimax)
+
+def _class_errors_2normal(D1, D2, q):
+    """Return (eps1, eps2) for a given 2-normal strategy q."""
+    mu1, s1 = D1['Mean'], D1['Sigma']
+    mu2, s2 = D2['Mean'], D2['Sigma']
+    t1, t2   = q['t1'], q['t2']
+    d        = q['decision']  # np.array of length 3
+
+    # If the middle interval is class 1 (d[1]==1), class-1 errors are outside (t1,t2]
+    if d[1] == 1:
+        eps1 = norm.cdf(t1, mu1, s1) + (1.0 - norm.cdf(t2, mu1, s1))
+        # class-2 error is *inside* the middle interval
+        eps2 = 1.0 - (norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2))
+    else:
+        # Middle interval is class 2
+        eps1 = 1.0 - (norm.cdf(t2, mu1, s1) - norm.cdf(t1, mu1, s1))
+        eps2 = norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2)
+
+    return eps1, eps2
 
 
 def risk_fix_q_cont(distribution_A, distribution_B, distribution_A_priors, q):
@@ -194,11 +214,11 @@ def risk_fix_q_cont(distribution_A, distribution_B, distribution_A_priors, q):
                                        q['decision'] - (3, ) np.int32 np.array decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
     :return risks:                  bayesian risk of the strategy q with varying priors (n, ) np.array
     """
-    mu1, s1 = D1["Mean"], D1["Sigma"]
-    mu2, s2 = D2["Mean"], D2["Sigma"]
+    mu1, s1 = distribution_A["Mean"], distribution_A["Sigma"]
+    mu2, s2 = distribution_B["Mean"], distribution_B["Sigma"]
 
-    t1, t2 = q_fix["t1"], q_fix["t2"]
-    d = q_fix["decision"]
+    t1, t2 = q["t1"], q["t2"]
+    d = q["decision"]
 
     if d[1] == 1:
         err1 = norm.cdf(t1, mu1, s1) + (1 - norm.cdf(t2, mu1, s1))
@@ -210,7 +230,7 @@ def risk_fix_q_cont(distribution_A, distribution_B, distribution_A_priors, q):
     else:
         err2 = norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2)
 
-    risk = priors_1 * err1 + (1 - priors_1) * err2
+    risk = distribution_A_priors * err1 + (1 - distribution_A_priors) * err2
     return risk
 
 
