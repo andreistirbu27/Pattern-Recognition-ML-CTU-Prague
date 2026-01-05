@@ -127,55 +127,65 @@ def find_strategy_2normal(distribution_A, distribution_B):
     if p_A < eps:
         q['t1'], q['t2'] = -np.inf, np.inf
         q['decision'] = np.array([1, 1, 1], dtype=np.int32)
-    elif p_B < eps:
+        return q
+    if p_B < eps:
         q['t1'], q['t2'] = -np.inf, np.inf
         q['decision'] = np.array([0, 0, 0], dtype=np.int32)
-    else:
-        a = 1 / (2 * s_B ** 2) - 1 / (2 * s_A ** 2)
-        b = m_A / (s_A ** 2) - m_B / (s_B ** 2)
-        c = (m_B ** 2) / (2 * s_B ** 2) - (m_A ** 2) / (2 * s_A ** 2) + np.log((p_A * s_B) / (p_B * s_A))
-        if a == 0:
-            # same sigmas -> not quadratic
-            if b == 0:
-                # same sigmas and same means -> not even linear
-                if c >= 0:
-                    q['t1'], q['t2'] = -np.inf, np.inf
-                    q['decision'] = np.array([0, 0, 0], dtype=np.int32)
-                else:
-                    q['t1'], q['t2'] = -np.inf, np.inf
-                    q['decision'] = np.array([1, 1, 1], dtype=np.int32)
+        return q
+
+    a = 1 / (2 * s_B ** 2) - 1 / (2 * s_A ** 2)
+    b = m_A / (s_A ** 2) - m_B / (s_B ** 2)
+    c = (m_B ** 2) / (2 * s_B ** 2) - (m_A ** 2) / (2 * s_A ** 2) + np.log((p_A * s_B) / (p_B * s_A))
+
+    tol = 1e-12
+
+    if abs(a) < tol:
+        # same sigmas -> not quadratic
+        if abs(b) < tol:
+            # same sigmas and same means -> not even linear
+            q['t1'], q['t2'] = -np.inf, np.inf
+            if c > 0 or abs(c) < tol:
+                q['decision'] = np.array([0, 0, 0], dtype=np.int32)
             else:
-                # same sigmas, different means -> linear equation
-                t = -c / b
-                q['t1'], q['t2'] = t, t
-                if b > 0:
-                    q['decision'] = np.array([1, 0, 1], dtype=np.int32)
-                else:
-                    q['decision'] = np.array([0, 1, 0], dtype=np.int32)
+                q['decision'] = np.array([1, 1, 1], dtype=np.int32)
         else:
-            # quadratic equation
-            D = b**2 - 4 * a * c
-            if D > 0:
-                roots = np.sort(np.roots([a, b, c]))
-                t1, t2 = roots[0], roots[1]
-                q['t1'], q['t2'] = t1, t2
-                if a > 0:
-                    q['decision'] = np.array([0, 1, 0], dtype=np.int32)
-                else:
-                    q['decision'] = np.array([1, 0, 1], dtype=np.int32)
-            elif D == 0:
-                t = -b / (2 * a)
-                q['t1'], q['t2'] = t, t
-                if a > 0:
-                    q['decision'] = np.array([0, 0, 0], dtype=np.int32)
-                else:
-                    q['decision'] = np.array([1, 1, 1], dtype=np.int32)
-            elif D < 0:
-                q['t1'], q['t2'] = -np.inf, np.inf
-                if a > 0:
-                    q['decision'] = np.array([0, 0, 0], dtype=np.int32)
-                else:
-                    q['decision'] = np.array([1, 1, 1], dtype=np.int32)
+            # same sigmas, different means -> linear equation
+            t = -c / b
+            q['t1'], q['t2'] = t, t
+            # single switch, middle interval irrelevant => keep it 0
+            if b > 0:
+                q['decision'] = np.array([1, 0, 0], dtype=np.int32)  # left=B, right=A
+            else:
+                q['decision'] = np.array([0, 0, 1], dtype=np.int32)  # left=A, right=B
+    else:
+        # quadratic equation
+        D = b ** 2 - 4 * a * c
+
+        if D > tol:
+            roots = np.sort(np.roots([a, b, c]))
+            t1, t2 = float(roots[0]), float(roots[1])
+            q['t1'], q['t2'] = t1, t2
+            if a > 0:
+                q['decision'] = np.array([0, 1, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 0, 1], dtype=np.int32)
+
+        elif abs(D) < tol:
+            # tangency: no sign change, so decision is constant on both sides.
+            # keep one "threshold" per spec (t1==t2) and force middle decision to 0.
+            t = -b / (2 * a)
+            q['t1'], q['t2'] = t, t
+            if a > 0:
+                q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 0, 1], dtype=np.int32)
+
+        else:  # D < 0
+            q['t1'], q['t2'] = -np.inf, np.inf
+            if a > 0:
+                q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 1, 1], dtype=np.int32)
 
     return q
 
