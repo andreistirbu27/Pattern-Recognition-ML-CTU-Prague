@@ -13,8 +13,9 @@ def ml_estim_normal(x):
     :return:    mu - mean - python float
                 var - variance - python float
     """
-    raise NotImplementedError("You have to implement this function.")
-    mu, var = None, None
+    x = np.asarray(x, dtype=float).ravel()
+    mu = float(np.mean(x))
+    var = float(np.mean((x - mu) ** 2))
     return mu, var
 
 
@@ -25,9 +26,8 @@ def ml_estim_categorical(counts):
     :param counts: measured bin counts, numpy array (n, )
     :return:       pk - parameters of the categorical distribution, numpy array (n, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    pk = None
-    return pk
+    counts = np.asarray(counts, dtype=float).ravel()
+    return counts / np.sum(counts)
 
 # MAP
 def map_estim_normal(x, mu0, nu, alpha, beta):
@@ -43,9 +43,15 @@ def map_estim_normal(x, mu0, nu, alpha, beta):
     :return:       mu - estimated mean - python float,
                    var - estimated variance - python float
     """
-    raise NotImplementedError("You have to implement this function.")
-    mu, var = None, None
-    return mu, var
+    x = np.asarray(x, dtype=float).ravel()
+    N = x.size
+
+    mu_map = float((nu * mu0 + np.sum(x)) / (N + nu))
+
+    ss = float(np.sum((x - mu_map) ** 2))
+    var_map = float((2 * beta + nu * (mu0 - mu_map) ** 2 + ss) / (N + 3 + 2 * alpha))
+
+    return mu_map, var_map
 
 
 def map_estim_categorical(counts, alpha):
@@ -57,9 +63,10 @@ def map_estim_categorical(counts, alpha):
 
     :return:        pk - estimated categorical distribution parameters, numpy array (n, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    pk = None
-    return pk
+    counts = np.asarray(counts, dtype=float).ravel()
+    alphas = np.asarray(alpha, dtype=float).ravel()
+    num = counts + alphas - 1.0
+    return num / np.sum(num)
 
 # BAYES
 def bayes_posterior_params_normal(x, prior_mu0, prior_nu, prior_alpha, prior_beta):
@@ -77,8 +84,23 @@ def bayes_posterior_params_normal(x, prior_mu0, prior_nu, prior_alpha, prior_bet
     :return:             alpha:  a posteriori NIG parameter - python float
     :return:             beta:   a posteriori NIG parameter - python float
     """
-    raise NotImplementedError("You have to implement this function.")
-    mu0, nu, alpha, beta = None, None, None, None
+    x = np.asarray(x, dtype=float).ravel()
+    N = x.size
+
+    sum_x = float(np.sum(x))
+    sum_x2 = float(np.sum(x ** 2))
+
+    nu = float(prior_nu + N)
+    mu0 = float((prior_nu * prior_mu0 + sum_x) / nu)
+    alpha = float(prior_alpha + N / 2.0)
+
+    beta = float(
+        prior_beta
+        + 0.5 * sum_x2
+        + 0.5 * prior_nu * (prior_mu0 ** 2)
+        - 0.5 * ((prior_nu * prior_mu0 + sum_x) ** 2) / nu
+    )
+
     return mu0, nu, alpha, beta
 
 def bayes_posterior_params_categorical(counts, alphas):
@@ -90,9 +112,9 @@ def bayes_posterior_params_categorical(counts, alphas):
 
     :return:         posterior_alphas - estimated Dirichlet distribution parameters, numpy array (n, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    posterior_alphas = None
-    return posterior_alphas
+    counts = np.asarray(counts, dtype=float).ravel()
+    alpha = np.asarray(alphas, dtype=float).ravel()
+    return counts + alpha
 
 def bayes_estim_pdf_normal(x_test, x,
                            mu0, nu, alpha, beta):
@@ -108,9 +130,24 @@ def bayes_estim_pdf_normal(x_test, x,
 
     :return:        pdf - Bayesian estimate pdf evaluated at x_test, numpy array (m, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    pdf = None
-    return pdf
+    mu0, nu, alpha, beta = bayes_posterior_params_normal(x, mu0, nu, alpha, beta)
+
+    x_test = np.asarray(x_test, dtype=float)
+
+    alpha_p = alpha + 0.5
+    nu_p = nu + 1.0
+    beta_p = (
+            0.5 * (x_test ** 2)
+            + beta
+            + 0.5 * nu * (mu0 ** 2)
+            - 0.5 * ((nu * mu0 + x_test) ** 2) / nu_p
+    )
+
+    kappa = (1.0 / np.sqrt(2.0 * np.pi)) * (np.sqrt(nu) / np.sqrt(nu_p)) \
+            * (beta ** alpha) / (beta_p ** alpha_p) \
+            * (spec.gamma(alpha_p) / spec.gamma(alpha))
+
+    return float(kappa) if kappa.shape == () else kappa
 
 def bayes_estim_categorical(counts, alphas):
     """
@@ -121,9 +158,8 @@ def bayes_estim_categorical(counts, alphas):
 
     :return:        pk - estimated categorical distribution parameters, numpy array (n, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    pk = None
-    return pk
+    alpha_post = bayes_posterior_params_categorical(counts, alphas)
+    return alpha_post / np.sum(alpha_post)
 
 # Classification
 def mle_Bayes_classif(x_test, x_train_A, x_train_C):
@@ -145,8 +181,24 @@ def mle_Bayes_classif(x_test, x_train_A, x_train_C):
                             DC['Sigma'] - python float
                             DC['Prior'] - python float
     """
-    raise NotImplementedError("You have to implement this function.")
-    q, labels, DA, DC = None, None, None, None
+    x_test = np.asarray(x_test, dtype=float).ravel()
+    x_train_A = np.asarray(x_train_A, dtype=float).ravel()
+    x_train_C = np.asarray(x_train_C, dtype=float).ravel()
+
+    nA = x_train_A.size
+    nC = x_train_C.size
+    pA = float(nA / (nA + nC))
+    pC = float(nC / (nA + nC))
+
+    muA, varA = ml_estim_normal(x_train_A)
+    muC, varC = ml_estim_normal(x_train_C)
+
+    DA = {'Mean': float(muA), 'Sigma': float(np.sqrt(varA)), 'Prior': pA}
+    DC = {'Mean': float(muC), 'Sigma': float(np.sqrt(varC)), 'Prior': pC}
+
+    q = find_strategy_2normal(DA, DC)
+    labels = classify_2normal(x_test, q)
+
     return q, labels, DA, DC
 
 
@@ -181,8 +233,24 @@ def map_Bayes_classif(x_test, x_train_A, x_train_C,
                             DC['Sigma'] - python float
                             DC['Prior'] - python float
     """
-    raise NotImplementedError("You have to implement this function.")
-    q, labels, DA, DC = None, None, None, None
+    x_test = np.asarray(x_test, dtype=float).ravel()
+    x_train_A = np.asarray(x_train_A, dtype=float).ravel()
+    x_train_C = np.asarray(x_train_C, dtype=float).ravel()
+
+    nA = x_train_A.size
+    nC = x_train_C.size
+    pA = float(nA / (nA + nC))
+    pC = float(nC / (nA + nC))
+
+    muA, varA = map_estim_normal(x_train_A, mu0_A, nu_A, alpha_A, beta_A)
+    muC, varC = map_estim_normal(x_train_C, mu0_C, nu_C, alpha_C, beta_C)
+
+    DA = {'Mean': float(muA), 'Sigma': float(np.sqrt(varA)), 'Prior': pA}
+    DC = {'Mean': float(muC), 'Sigma': float(np.sqrt(varC)), 'Prior': pC}
+
+    q = find_strategy_2normal(DA, DC)
+    labels = classify_2normal(x_test, q)
+
     return q, labels, DA, DC
 
 
@@ -208,8 +276,19 @@ def bayes_Bayes_classif(x_test, x_train_A, x_train_C,
 
     :return:               labels - classification of x_test, numpy array (n, ) int32, values 0 or 1
     """
-    raise NotImplementedError("You have to implement this function.")
-    labels = None
+    x_test = np.asarray(x_test, dtype=float).ravel()
+    x_train_A = np.asarray(x_train_A, dtype=float).ravel()
+    x_train_C = np.asarray(x_train_C, dtype=float).ravel()
+
+    nA = x_train_A.size
+    nC = x_train_C.size
+    pA = float(nA / (nA + nC))
+    pC = float(nC / (nA + nC))
+
+    pxA = bayes_estim_pdf_normal(x_test, x_train_A, mu0_A, nu_A, alpha_A, beta_A)
+    pxC = bayes_estim_pdf_normal(x_test, x_train_C, mu0_C, nu_C, alpha_C, beta_C)
+
+    labels = (pC * pxC > pA * pxA).astype(np.int32)  # 0 -> A, 1 -> C
     return labels
 
 
@@ -237,8 +316,79 @@ def find_strategy_2normal(distribution_A, distribution_B):
                                If there is only one threshold, q['t1'] should be equal to q['t2'] and the middle decision should be 0
                                If there is no threshold, q['t1'] and q['t2'] should be -/+ infinity and all the decision values should be the same (0 preferred)
     """
-    raise NotImplementedError("You have to implement this function.")
-    q = None
+    s_A = distribution_A['Sigma']
+    m_A = distribution_A['Mean']
+    p_A = distribution_A['Prior']
+    s_B = distribution_B['Sigma']
+    m_B = distribution_B['Mean']
+    p_B = distribution_B['Prior']
+
+    q = {}
+
+    # extreme priors
+    eps = 1e-10
+    if p_A < eps:
+        q['t1'], q['t2'] = -np.inf, np.inf
+        q['decision'] = np.array([1, 1, 1], dtype=np.int32)
+        return q
+    if p_B < eps:
+        q['t1'], q['t2'] = -np.inf, np.inf
+        q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+        return q
+
+    a = 1 / (2 * s_B ** 2) - 1 / (2 * s_A ** 2)
+    b = m_A / (s_A ** 2) - m_B / (s_B ** 2)
+    c = (m_B ** 2) / (2 * s_B ** 2) - (m_A ** 2) / (2 * s_A ** 2) + np.log((p_A * s_B) / (p_B * s_A))
+
+    tol = 1e-12
+
+    if abs(a) < tol:
+        # same sigmas -> not quadratic
+        if abs(b) < tol:
+            # same sigmas and same means -> not even linear
+            q['t1'], q['t2'] = -np.inf, np.inf
+            if c > 0 or abs(c) < tol:
+                q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 1, 1], dtype=np.int32)
+        else:
+            # same sigmas, different means -> linear equation
+            t = -c / b
+            q['t1'], q['t2'] = t, t
+            # single switch, middle interval irrelevant => keep it 0
+            if b > 0:
+                q['decision'] = np.array([1, 0, 0], dtype=np.int32)  # left=B, right=A
+            else:
+                q['decision'] = np.array([0, 0, 1], dtype=np.int32)  # left=A, right=B
+    else:
+        # quadratic equation
+        D = b ** 2 - 4 * a * c
+
+        if D > tol:
+            roots = np.sort(np.roots([a, b, c]))
+            t1, t2 = float(roots[0]), float(roots[1])
+            q['t1'], q['t2'] = t1, t2
+            if a > 0:
+                q['decision'] = np.array([0, 1, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 0, 1], dtype=np.int32)
+
+        elif abs(D) < tol:
+            # tangency: no sign change, so decision is constant on both sides.
+            # keep one "threshold" per spec (t1==t2) and force middle decision to 0.
+            t = -b / (2 * a)
+            q['t1'], q['t2'] = t, t
+            if a > 0:
+                q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 0, 1], dtype=np.int32)
+
+        else:  # D < 0
+            q['t1'], q['t2'] = -np.inf, np.inf
+            if a > 0:
+                q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 1, 1], dtype=np.int32)
 
     return q
 
@@ -255,9 +405,17 @@ def classify_2normal(measurements, q):
                     q['decision'] - (3, ) int32 np.array decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
     :return:        label - classification labels, (n, ) int32
     """
-    raise NotImplementedError("You have to implement this function.")
-    label = None
-    return label
+    t1, t2 = q['t1'], q['t2']
+    d1, d2, d3 = q['decision']  # decisions per interval
+
+    x = np.asarray(measurements)
+
+    # vectorized interval selection
+    labels = np.empty_like(x, dtype=int)
+    labels[x < t1] = d1
+    labels[(x >= t1) & (x < t2)] = d2
+    labels[x >= t2] = d3
+    return labels
 
 
 def classification_error(predictions, labels):
@@ -269,9 +427,7 @@ def classification_error(predictions, labels):
     :return:            error - classification error ~ a fraction of predictions being incorrect
                         python float in range <0, 1>
     """
-    raise NotImplementedError("You have to implement this function.")
-    error = None
-    return error
+    return np.mean(predictions != labels)
 
 
 ################################################################################
