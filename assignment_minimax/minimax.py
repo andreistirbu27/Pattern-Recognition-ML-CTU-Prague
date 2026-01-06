@@ -26,33 +26,47 @@ def minimax_strategy_discrete(distribution1, distribution2):
     :return: eps1:                  cumulative error on the first class for all thresholds, (n * n + 1,) numpy array
     :return: eps2:                  cumulative error on the second class for all thresholds, (n * n + 1,) numpy array
     """
+    D1 = np.asarray(distribution1, dtype=float)
+    D2 = np.asarray(distribution2, dtype=float)
+    if D1.shape != D2.shape:
+        raise ValueError("distribution1 and distribution2 must have the same shape.")
 
-    raise NotImplementedError("You have to implement this function.")
+    p1 = D1.ravel()
+    p2 = D2.ravel()
+    N = p1.size
 
-    p1 = distribution1.flatten()
-    p2 = distribution2.flatten()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = p1 / p2
 
-    r = np.divide(p1, p2, out=np.full_like(p1, np.nan), where=(p2 != 0))
+    nan_mask = np.isnan(r)  # 0/0 positions
 
-    idx = np.argsort(r)
-    p1_sorted = p1[idx]
-    p2_sorted = p2[idx]
+    # IMPORTANT: match reference tie-breaking
+    order = np.argsort(r)  # default kind (usually quicksort)
 
-    N = len(r)
+    p1s = p1[order]
+    p2s = p2[order]
 
-    eps1 = np.zeros(N + 1)
-    eps2 = np.zeros(N + 1)
+    pref1 = np.concatenate(([0.0], np.cumsum(p1s)))
+    pref2 = np.concatenate(([0.0], np.cumsum(p2s)))
+    total2 = pref2[-1]
 
-    for i in range(N + 1):
-        eps1[i] = np.sum(p1_sorted[:i])
-        eps2[i] = np.sum(p2_sorted[i:])
+    # threshold i: first i -> class2, rest -> class1
+    eps1 = pref1
+    eps2 = total2 - pref2
 
-    opt_i = np.argmin(np.maximum(eps1, eps2))
+    worst = np.maximum(eps1, eps2)
+    opt_i = int(np.argmin(worst))
 
-    q_flat = np.ones(N, dtype=int)
-    q_flat[idx[opt_i:]] = 0
+    # q values: 0=class1, 1=class2
+    q_sorted = (np.arange(N) < opt_i).astype(np.int32)
+
+    q_flat = np.empty(N, dtype=np.int32)
+    q_flat[order] = q_sorted
+
+    # enforce: nan -> class1 (0)
+    q_flat[nan_mask] = 0
+
     q = q_flat.reshape(D1.shape)
-
     return q, opt_i, eps1, eps2
 
 
@@ -68,12 +82,12 @@ def classify_discrete(imgs, q):
     """
     arr = np.asarray(imgs)
 
-    # --- Case A: already (N, 2) discrete measurements ---
+    # already (N, 2) discrete measurements
     if arr.ndim == 2 and arr.shape[1] == 2:
         xy = arr
 
     else:
-        # --- Case B: images; convert to (H, W, N) for measurement funcs ---
+        # images; convert to (H, W, N) for measurement funcs
         imgs = arr
 
         # squeeze trailing singleton channel if present
@@ -99,7 +113,7 @@ def classify_discrete(imgs, q):
 
         xy = np.stack([x_meas, y_meas], axis=1)  # (N,2)
 
-    # --- Map (x,y) in [-10,10] to q indices and predict ---
+    # Map (x,y) in [-10,10] to q indices and predict
     x = np.rint(xy[:, 0]).astype(int)
     y = np.rint(xy[:, 1]).astype(int)
 
@@ -120,28 +134,34 @@ def worst_risk_cont(distribution_A, distribution_B, true_A_prior):
     :param true_A_prior:            true A prior probability - python float
     :return worst_risk:             worst possible bayesian risk when evaluated with different prior
     """
-    distribution_A['Prior'] = true_A_prior
-    distribution_B['Prior'] = 1 - true_A_prior
+    D1p = distribution_A.copy()
+    D2p = distribution_B.copy()
+    D1p["Prior"] = float(true_A_prior)
+    D2p["Prior"] = 1.0 - float(true_A_prior)
 
-    q = find_strategy_2normal(distribution_A, distribution_B)
-    r = bayes_risk_2normal(distribution_A, distribution_B, q)
+    q = find_strategy_2normal(D1p, D2p)
 
-    mu1, s1 = distribution_A['Mean'], distribution_A['Sigma']
-    mu2, s2 = distribution_B['Mean'], distribution_B['Sigma']
-    t1, t2 = q['t1'], q['t2']
-    d = q['decision']
+    mu1, s1 = float(D1p["Mean"]), float(D1p["Sigma"])
+    mu2, s2 = float(D2p["Mean"]), float(D2p["Sigma"])
 
-    from scipy.stats import norm
+    t1 = float(q["t1"])
+    t2 = float(q["t2"])
+    d = np.asarray(q["decision"], dtype=int)  # 0 -> class1, 1 -> class2
 
-    if d[1] == 1:
-        eps1 = norm.cdf(t1, mu1, s1) + (1 - norm.cdf(t2, mu1, s1))
-        eps2 = 1 - (norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2))
-    else:
-        eps1 = 1 - (norm.cdf(t2, mu1, s1) - norm.cdf(t1, mu1, s1))
-        eps2 = norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2)
+    # interval masses under each class
+    F1_t1 = norm.cdf(t1, loc=mu1, scale=s1)
+    F1_t2 = norm.cdf(t2, loc=mu1, scale=s1)
+    p1_int = np.array([F1_t1, F1_t2 - F1_t1, 1.0 - F1_t2])
 
-    worst_r = max(eps1, eps2)
-    return worst_r
+    F2_t1 = norm.cdf(t1, loc=mu2, scale=s2)
+    F2_t2 = norm.cdf(t2, loc=mu2, scale=s2)
+    p2_int = np.array([F2_t1, F2_t2 - F2_t1, 1.0 - F2_t2])
+
+    # conditional errors for this strategy
+    eps1 = float(p1_int[d == 1].sum())  # P(decide class2 | true class1)
+    eps2 = float(p2_int[d == 0].sum())  # P(decide class1 | true class2)
+
+    return max(eps1, eps2)
 
 
 def minimax_strategy_cont(distribution_A, distribution_B):
@@ -158,46 +178,54 @@ def minimax_strategy_cont(distribution_A, distribution_B):
                                q['decision'] - (3, ) np.int32 np.array decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
     :return worst_risk      worst risk of the minimax strategy q - python float
     """
+    D1c = distribution_A.copy()
+    D2c = distribution_B.copy()
+
     def objective(p):
         p = float(p)
-        distribution_A['Prior'] = p
-        distribution_B['Prior'] = 1.0 - p
-        q = find_strategy_2normal(distribution_A, distribution_B)
-        eps1, eps2 = _class_errors_2normal(distribution_A, distribution_B, q)
+        D1c["Prior"] = p
+        D2c["Prior"] = 1.0 - p
+        q = find_strategy_2normal(D1c, D2c)
+        eps1, eps2 = _class_errors_2normal(D1c, D2c, q)
         return max(eps1, eps2)
 
+    # stay away from endpoints for numerical stability
     p_opt = fminbound(objective, 1e-9, 1.0 - 1e-9)
 
-    distribution_A['Prior'] = float(p_opt)
-    distribution_B['Prior'] = 1.0 - float(p_opt)
-    q_minimax = find_strategy_2normal(distribution_A, distribution_B)
+    D1c["Prior"] = float(p_opt)
+    D2c["Prior"] = 1.0 - float(p_opt)
+    q_minimax = find_strategy_2normal(D1c, D2c)
 
-    eps1, eps2 = _class_errors_2normal(distribution_A, distribution_B, q_minimax)
-    risk_minimax = max(eps1, eps2)
+    eps1, eps2 = _class_errors_2normal(D1c, D2c, q_minimax)
+    risk_minimax = float(max(eps1, eps2))
 
-    q_minimax['decision'] = np.asarray(q_minimax['decision'], dtype=np.int32)
-    q_minimax['t1'] = float(q_minimax['t1'])
-    q_minimax['t2'] = float(q_minimax['t2'])
+    # enforce autograder-friendly types
+    q_minimax["decision"] = np.asarray(q_minimax["decision"], dtype=np.int32)
+    q_minimax["t1"] = float(q_minimax["t1"])
+    q_minimax["t2"] = float(q_minimax["t2"])
 
-    return q_minimax, float(risk_minimax)
+    return q_minimax, risk_minimax
 
 def _class_errors_2normal(D1, D2, q):
     """Return (eps1, eps2) for a given 2-normal strategy q."""
-    mu1, s1 = D1['Mean'], D1['Sigma']
-    mu2, s2 = D2['Mean'], D2['Sigma']
-    t1, t2   = q['t1'], q['t2']
-    d        = q['decision']  # np.array of length 3
+    mu1, s1 = float(D1["Mean"]), float(D1["Sigma"])
+    mu2, s2 = float(D2["Mean"]), float(D2["Sigma"])
 
-    # If the middle interval is class 1 (d[1]==1), class-1 errors are outside (t1,t2]
-    if d[1] == 1:
-        eps1 = norm.cdf(t1, mu1, s1) + (1.0 - norm.cdf(t2, mu1, s1))
-        # class-2 error is *inside* the middle interval
-        eps2 = 1.0 - (norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2))
-    else:
-        # Middle interval is class 2
-        eps1 = 1.0 - (norm.cdf(t2, mu1, s1) - norm.cdf(t1, mu1, s1))
-        eps2 = norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2)
+    t1 = float(q["t1"])
+    t2 = float(q["t2"])
+    d = np.asarray(q["decision"], dtype=int)
 
+    # interval masses under each class
+    F1_t1 = norm.cdf(t1, loc=mu1, scale=s1)
+    F1_t2 = norm.cdf(t2, loc=mu1, scale=s1)
+    p1_int = np.array([F1_t1, F1_t2 - F1_t1, 1.0 - F1_t2], dtype=float)
+
+    F2_t1 = norm.cdf(t1, loc=mu2, scale=s2)
+    F2_t2 = norm.cdf(t2, loc=mu2, scale=s2)
+    p2_int = np.array([F2_t1, F2_t2 - F2_t1, 1.0 - F2_t2], dtype=float)
+
+    eps1 = float(p1_int[d == 1].sum())  # decide class2 when true is class1
+    eps2 = float(p2_int[d == 0].sum())  # decide class1 when true is class2
     return eps1, eps2
 
 
@@ -214,23 +242,34 @@ def risk_fix_q_cont(distribution_A, distribution_B, distribution_A_priors, q):
                                        q['decision'] - (3, ) np.int32 np.array decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
     :return risks:                  bayesian risk of the strategy q with varying priors (n, ) np.array
     """
-    mu1, s1 = distribution_A["Mean"], distribution_A["Sigma"]
-    mu2, s2 = distribution_B["Mean"], distribution_B["Sigma"]
+    priors_1 = np.asarray(distribution_A_priors, dtype=float)
 
-    t1, t2 = q["t1"], q["t2"]
-    d = q["decision"]
+    mu1, s1 = float(distribution_A["Mean"]), float(distribution_A["Sigma"])
+    mu2, s2 = float(distribution_B["Mean"]), float(distribution_B["Sigma"])
 
-    if d[1] == 1:
-        err1 = norm.cdf(t1, mu1, s1) + (1 - norm.cdf(t2, mu1, s1))
-    else:
-        err1 = 1 - (norm.cdf(t2, mu1, s1) - norm.cdf(t1, mu1, s1))
+    t1 = float(q["t1"])
+    t2 = float(q["t2"])
+    d = np.asarray(q["decision"], dtype=int)
+    if d.shape != (3,):
+        raise ValueError("q_fix['decision'] must be shape (3,)")
 
-    if d[1] == 1:
-        err2 = 1 - (norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2))
-    else:
-        err2 = norm.cdf(t2, mu2, s2) - norm.cdf(t1, mu2, s2)
+    # interval probabilities for a Normal:
+    # I1: (-inf, t1], I2: (t1, t2], I3: (t2, inf)
+    F1_t1 = norm.cdf(t1, loc=mu1, scale=s1)
+    F1_t2 = norm.cdf(t2, loc=mu1, scale=s1)
+    p1_intervals = np.array([F1_t1, F1_t2 - F1_t1, 1.0 - F1_t2], dtype=float)
 
-    risk = distribution_A_priors * err1 + (1 - distribution_A_priors) * err2
+    F2_t1 = norm.cdf(t1, loc=mu2, scale=s2)
+    F2_t2 = norm.cdf(t2, loc=mu2, scale=s2)
+    p2_intervals = np.array([F2_t1, F2_t2 - F2_t1, 1.0 - F2_t2], dtype=float)
+
+    # Errors:
+    # err1 = P(decide class 2 | true class 1) = sum intervals where d == 1 under class 1
+    # err2 = P(decide class 1 | true class 2) = sum intervals where d == 0 under class 2
+    err1 = float(np.sum(p1_intervals[d == 1]))
+    err2 = float(np.sum(p2_intervals[d == 0]))
+
+    risk = priors_1 * err1 + (1.0 - priors_1) * err2
     return risk
 
 
@@ -267,8 +306,10 @@ def find_strategy_2normal(distribution_A, distribution_B):
                                q['t1'], q['t2'] - decision thresholds - python floats
                                q['decision'] - (3, ) np.int32 np.array decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
                                If there is only one threshold, q['t1'] should be equal to q['t2'] and the middle decision should be 0
-                               If there is no threshold, q['t1'] and q['t2'] should be -/+ infinity and all the decision values should be the same (0 preferred)
+                               If there is no threshold, q['t1'] and q['t2'] should be -/+ infinity and all the decision values should be the same
+                                (0 preferred if both strategies would have the same risk)
     """
+
     s_A = distribution_A['Sigma']
     m_A = distribution_A['Mean']
     p_A = distribution_A['Prior']
@@ -283,55 +324,65 @@ def find_strategy_2normal(distribution_A, distribution_B):
     if p_A < eps:
         q['t1'], q['t2'] = -np.inf, np.inf
         q['decision'] = np.array([1, 1, 1], dtype=np.int32)
-    elif p_B < eps:
+        return q
+    if p_B < eps:
         q['t1'], q['t2'] = -np.inf, np.inf
         q['decision'] = np.array([0, 0, 0], dtype=np.int32)
-    else:
-        a = 1 / (2 * s_B ** 2) - 1 / (2 * s_A ** 2)
-        b = m_A / (s_A ** 2) - m_B / (s_B ** 2)
-        c = (m_B ** 2) / (2 * s_B ** 2) - (m_A ** 2) / (2 * s_A ** 2) + np.log((p_A * s_B) / (p_B * s_A))
-        if a == 0:
-            # same sigmas -> not quadratic
-            if b == 0:
-                # same sigmas and same means -> not even linear
-                if c >= 0:
-                    q['t1'], q['t2'] = -np.inf, np.inf
-                    q['decision'] = np.array([0, 0, 0], dtype=np.int32)
-                else:
-                    q['t1'], q['t2'] = -np.inf, np.inf
-                    q['decision'] = np.array([1, 1, 1], dtype=np.int32)
+        return q
+
+    a = 1 / (2 * s_B ** 2) - 1 / (2 * s_A ** 2)
+    b = m_A / (s_A ** 2) - m_B / (s_B ** 2)
+    c = (m_B ** 2) / (2 * s_B ** 2) - (m_A ** 2) / (2 * s_A ** 2) + np.log((p_A * s_B) / (p_B * s_A))
+
+    tol = 1e-12
+
+    if abs(a) < tol:
+        # same sigmas -> not quadratic
+        if abs(b) < tol:
+            # same sigmas and same means -> not even linear
+            q['t1'], q['t2'] = -np.inf, np.inf
+            if c > 0 or abs(c) < tol:
+                q['decision'] = np.array([0, 0, 0], dtype=np.int32)
             else:
-                # same sigmas, different means -> linear equation
-                t = -c / b
-                q['t1'], q['t2'] = t, t
-                if b > 0:
-                    q['decision'] = np.array([1, 0, 1], dtype=np.int32)
-                else:
-                    q['decision'] = np.array([0, 1, 0], dtype=np.int32)
+                q['decision'] = np.array([1, 1, 1], dtype=np.int32)
         else:
-            # quadratic equation
-            D = b ** 2 - 4 * a * c
-            if D > 0:
-                roots = np.sort(np.roots([a, b, c]))
-                t1, t2 = roots[0], roots[1]
-                q['t1'], q['t2'] = t1, t2
-                if a > 0:
-                    q['decision'] = np.array([0, 1, 0], dtype=np.int32)
-                else:
-                    q['decision'] = np.array([1, 0, 1], dtype=np.int32)
-            elif D == 0:
-                t = -b / (2 * a)
-                q['t1'], q['t2'] = t, t
-                if a > 0:
-                    q['decision'] = np.array([0, 0, 0], dtype=np.int32)
-                else:
-                    q['decision'] = np.array([1, 1, 1], dtype=np.int32)
-            elif D < 0:
-                q['t1'], q['t2'] = -np.inf, np.inf
-                if a > 0:
-                    q['decision'] = np.array([0, 0, 0], dtype=np.int32)
-                else:
-                    q['decision'] = np.array([1, 1, 1], dtype=np.int32)
+            # same sigmas, different means -> linear equation
+            t = -c / b
+            q['t1'], q['t2'] = t, t
+            # single switch, middle interval irrelevant => keep it 0
+            if b > 0:
+                q['decision'] = np.array([1, 0, 0], dtype=np.int32)  # left=B, right=A
+            else:
+                q['decision'] = np.array([0, 0, 1], dtype=np.int32)  # left=A, right=B
+    else:
+        # quadratic equation
+        D = b ** 2 - 4 * a * c
+
+        if D > tol:
+            roots = np.sort(np.roots([a, b, c]))
+            t1, t2 = float(roots[0]), float(roots[1])
+            q['t1'], q['t2'] = t1, t2
+            if a > 0:
+                q['decision'] = np.array([0, 1, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 0, 1], dtype=np.int32)
+
+        elif abs(D) < tol:
+            # tangency: no sign change, so decision is constant on both sides.
+            # keep one "threshold" per spec (t1==t2) and force middle decision to 0.
+            t = -b / (2 * a)
+            q['t1'], q['t2'] = t, t
+            if a > 0:
+                q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 0, 1], dtype=np.int32)
+
+        else:  # D < 0
+            q['t1'], q['t2'] = -np.inf, np.inf
+            if a > 0:
+                q['decision'] = np.array([0, 0, 0], dtype=np.int32)
+            else:
+                q['decision'] = np.array([1, 1, 1], dtype=np.int32)
 
     return q
 
@@ -382,7 +433,7 @@ def classify_2normal(measurements, q):
     :param q:       strategy
                     q['t1'] q['t2'] - float decision thresholds
                     q['decision'] - (3, ) int32 np.array decisions for intervals (-inf, t1>, (t1, t2>, (t2, inf)
-    :return:        label - classification labels, int32 np.array (n, )
+    :return:        label - classification labels, (n, ) int32
     """
     t1, t2 = q['t1'], q['t2']
     d1, d2, d3 = q['decision']  # decisions per interval
