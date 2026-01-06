@@ -20,9 +20,30 @@ def perceptron(X, y, max_iterations):
     :return w:              w - weights, (d,) np array
     :return b:              b - bias, python float
     """
-    raise NotImplementedError("You have to implement this function.")
-    w, b = None, None
-    return w, b
+    X = np.asarray(X)
+    y = np.asarray(y).ravel().astype(int)
+
+    d, N = X.shape
+
+    # augmented samples
+    Z = np.vstack([X, np.ones((1, N))])  # (d+1, N)
+
+    # transform to z_i so that we want v^T z_i > 0 for all i
+    s = 1 - 2 * y  # y=0 -> +1, y=1 -> -1
+    Zt = Z * s  # (d+1, N)
+
+    v = np.zeros(d + 1, dtype=float)
+
+    for _ in range(int(max_iterations)):
+        margins = v @ Zt  # (N,)
+        i = int(np.argmin(margins))  # most violated constraint
+
+        if margins[i] > 0:
+            return v[:-1].copy(), float(v[-1])
+
+        v += Zt[:, i]
+
+    return np.full(d, np.nan), float("nan")
 
 
 def lift_dimension(X):
@@ -35,8 +56,10 @@ def lift_dimension(X):
                 2-dimensional observations, (2, number_of_observations) np array
     :return Z:  observations in the lifted feature space, (5, number_of_observations) np array
     """
-    raise NotImplementedError("You have to implement this function.")
-    Z = None
+    X = np.asarray(X)
+    x1 = X[0, :]
+    x2 = X[1, :]
+    Z = np.vstack([x1, x2, x1 * x1, x1 * x2, x2 * x2])
     return Z
 
 
@@ -53,8 +76,14 @@ def classif_quadrat_perc(tst, model):
     :return:        Y - classification result (contains either 0 or 1), (n,) np array
     """
 
-    raise NotImplementedError("You have to implement this function.")
-    Y = None
+    w = np.asarray(model["w"]).ravel()
+    b = float(model["b"])
+
+    Z = lift_dimension(tst)  # (5, N)
+    scores = w @ Z + b  # (N,)
+
+    Y = np.zeros(scores.shape, dtype=int)
+    Y[scores < 0] = 1  # q(x)=1 if w·z + b < 0, else 0
     return Y
 
 
