@@ -15,8 +15,9 @@ def logistic_loss(X, y, w):
     :param w:    weights, np.array (d, )
     :return E:   calculated loss, python float
     """
-    raise NotImplementedError("You have to implement this function.")
-    E = None
+    s = w @ X
+    z = -y * s
+    E = float(np.mean(np.logaddexp(0.0, z)))
     return E
 
 
@@ -31,8 +32,19 @@ def logistic_loss_gradient(X, y, w):
     :param w:   weights, np.array (d, )
     :return g:  resulting gradient vector, np.array (d, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    g = None
+    n = X.shape[1]
+    s = w @ X  # (n,)
+    z = -y * s  # (n,)
+
+    # stable sigmoid(z)
+    sigma = np.where(
+        z >= 0,
+        1.0 / (1.0 + np.exp(-z)),
+        np.exp(z) / (1.0 + np.exp(z))
+    )
+
+    a = -y * sigma  # (n,)
+    g = (X @ a) / n  # (d,)
     return g
 
 
@@ -50,8 +62,38 @@ def logistic_loss_gradient_descent(X, y, w_init, epsilon):
     :return wt:     wt - progress of weights, np.array (d, number_of_accepted_candidates)
     :return Et:     Et - progress of logistic loss, np.array (number_of_accepted_candidates, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    w, wt, Et = None, None, None
+    w = np.array(w_init, dtype=float).copy()
+    step_size = 1.0
+
+    E = logistic_loss(X, y, w)
+    g = logistic_loss_gradient(X, y, w)
+
+    wt_list = [w.copy()]
+    Et_list = [E]
+
+    max_iter = 100000
+    for _ in range(max_iter):
+        w_candidate = w - step_size * g
+        E_new = logistic_loss(X, y, w_candidate)
+        g_new = logistic_loss_gradient(X, y, w_candidate)
+
+        if E_new < E:
+            w_prev = w
+            w = w_candidate
+            E = E_new
+            g = g_new
+            step_size *= 2.0
+
+            wt_list.append(w.copy())
+            Et_list.append(E)
+
+            if np.linalg.norm(w - w_prev) <= epsilon:
+                break
+        else:
+            step_size /= 2.0
+
+    wt = np.stack(wt_list, axis=1)
+    Et = np.array(Et_list, dtype=float)
     return w, wt, Et
 
 
@@ -65,8 +107,9 @@ def classify_images(X, w):
     :param w:    weights, np.array (d, )
     :return y:   estimated labels of the observations, np.array (n, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    y = None
+    scores = w @ X
+    y = np.ones(scores.shape, dtype=int)
+    y[scores <= 0] = -1
     return y
 
 
@@ -79,9 +122,9 @@ def get_threshold(w):
     :param w:    weights, np.array (2, )
     :return:     calculated threshold (scalar)
     """
-    raise NotImplementedError("You have to implement this function.")
-    thr = None
-    return thr
+    w0 = float(w[0])
+    w1 = float(w[1])
+    return -w0 / w1
 
 
 ################################################################################
