@@ -15,8 +15,30 @@ def get_kernel(Xi, Xj, options):
     :return K:      array with kernel function values,  (m, n) np array
     """
 
-    raise NotImplementedError("You have to implement this function.")
-    K = None
+    kernel = options.get('kernel', 'linear')
+
+    Xi = np.asarray(Xi, dtype=float)
+    Xj = np.asarray(Xj, dtype=float)
+
+    if kernel == 'linear':
+        # (m, n) = (d,m)^T @ (d,n)
+        K = Xi.T @ Xj
+
+    elif kernel == 'polynomial':
+        d = options.get('d', 2)
+        K = (Xi.T @ Xj + 1.0) ** d
+
+    elif kernel == 'rbf':
+        sigma = float(options.get('sigma', 1.0))
+        # squared distances: ||xi - xj||^2 = ||xi||^2 + ||xj||^2 - 2 xi^T xj
+        Xi2 = np.sum(Xi * Xi, axis=0)[:, None]  # (m, 1)
+        Xj2 = np.sum(Xj * Xj, axis=0)[None, :]  # (1, n)
+        D2 = Xi2 + Xj2 - 2.0 * (Xi.T @ Xj)  # (m, n)
+        K = np.exp(-D2 / (2.0 * sigma * sigma))
+
+    else:
+        raise ValueError(f"Unknown kernel '{kernel}'")
+
     return K
 
 
@@ -44,10 +66,38 @@ def svm(X, y, C, options):
         - model['fun']      - function that should be used for classification, function reference
     """
 
-    raise NotImplementedError("You have to implement this function.")
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y).ravel().astype(float)
+    n = y.size
+
+    K = get_kernel(X, X, options)  # (n, n)
+
+    # QP in gsmo form: min 0.5*a^T H a + f^T a
+    # where H_ij = y_i y_j K_ij, f = -1, and constraints y^T a = 0, 0 <= a <= C
+    yy = y[:, None] * y[None, :]
+    H = yy * K
+    f = -np.ones(n, dtype=float)
+    a = y.copy()
+    b_eq = 0.0
+    lb = np.zeros(n, dtype=float)
+    ub = np.full(n, float(C), dtype=float)
+
+    verb = int(options.get('verb', 0))
+    t_max = options.get('t_max', np.inf)
+
+    alphas, _, _, _ = gsmo(H, f, a, b=b_eq, lb=lb, ub=ub, verb=verb, t_max=t_max)
+
+    # support vectors (use eps=1e-10 instead of 0)
+    eps = 1e-10
+    sv_idx = np.where(alphas > eps)[0]
+
     model = {}
-    model['fun'] = classif_svm
+    model['sv'] = X[:, sv_idx]
+    model['y'] = y[sv_idx]
+    model['alpha'] = alphas[sv_idx]
     model['options'] = options
+    model['b'] = float(compute_bias(K, y, alphas, C))
+    model['fun'] = classif_svm
     return model
 
 
@@ -60,9 +110,20 @@ def classif_svm(X, model):
 
     :return classif: labels (-1, 1) for feature points in X, np array (n, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    classif = None
-    return classif
+    X = np.asarray(X, dtype=float)
+
+    sv = np.asarray(model['sv'], dtype=float)  # (d, m_sv)
+    y_sv = np.asarray(model['y']).ravel().astype(float)  # (m_sv,)
+    alpha = np.asarray(model['alpha']).ravel().astype(float)  # (m_sv,)
+    b = float(model['b'])
+    options = model.get('options', {'kernel': 'linear'})
+
+    K = get_kernel(sv, X, options)  # (m_sv, N)
+    scores = (alpha * y_sv) @ K + b  # (N,)
+
+    Y = np.ones(scores.shape, dtype=int)
+    Y[scores < 0] = -1
+    return Y
 
 
 def svm_crossvalidation(itrn, itst, X, y, C, options):
@@ -79,8 +140,22 @@ def svm_crossvalidation(itrn, itst, X, y, C, options):
     :return error:  mean crossvalidation test error
     """
 
-    raise NotImplementedError("You have to implement this function.")
-    error = None
+    X = np.asarray(X)
+    y = np.asarray(y).ravel()
+
+    num_folds = len(itrn)
+    errs = np.zeros(num_folds, dtype=float)
+
+    for i in range(num_folds):
+        trn_idx = itrn[i]
+        tst_idx = itst[i]
+
+        model = svm(X[:, trn_idx], y[trn_idx], C, options)
+        pred = classif_svm(X[:, tst_idx], model)
+
+        errs[i] = np.mean(pred != y[tst_idx])
+
+    error = float(np.mean(errs))
     return error
 
 
@@ -103,8 +178,50 @@ def compute_measurements_2d(data, normalization=None):
                                           computed from data if normalization parameter not provided
     """
 
-    raise NotImplementedError("You have to implement this function.")
-    X, y, normalization = None, None, None
+    imgs = np.asarray(data['images'], dtype=np.float64)
+    y = np.asarray(data['labels']).ravel()
+
+    H, W, N = imgs.shape
+    h2 = H // 2
+    w2 = W // 2
+
+    # features (compute in float to avoid uint8 overflow)
+    left = imgs[:, :w2, :].sum(axis=(0, 1))
+    right = imgs[:, w2:, :].sum(axis=(0, 1))
+    lr = left - right
+
+    top = imgs[:h2, :, :].sum(axis=(0, 1))
+    bottom = imgs[h2:, :, :].sum(axis=(0, 1))
+    ud = top - bottom
+
+    if normalization is None:
+        lr_mean = float(lr.mean())
+        lr_std = float(lr.std())
+        ud_mean = float(ud.mean())
+        ud_std = float(ud.std())
+
+        # prevent division by zero in degenerate cases
+        if lr_std == 0.0:
+            lr_std = 1.0
+        if ud_std == 0.0:
+            ud_std = 1.0
+
+        normalization = {
+            'lr_mean': lr_mean,
+            'lr_std': lr_std,
+            'ud_mean': ud_mean,
+            'ud_std': ud_std
+        }
+    else:
+        lr_mean = float(normalization['lr_mean'])
+        lr_std = float(normalization['lr_std'])
+        ud_mean = float(normalization['ud_mean'])
+        ud_std = float(normalization['ud_std'])
+
+    lr_n = (lr - lr_mean) / lr_std
+    ud_n = (ud - ud_mean) / ud_std
+
+    X = np.vstack([lr_n, ud_n])
     return X, y, normalization
 
 
