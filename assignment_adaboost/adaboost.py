@@ -17,9 +17,61 @@ def adaboost(X, y, num_steps):
     :return wc_errors:          error of the best weak classifier in each iteration, np array (n_wc, )
     :return upper_bound:        upper bound on the training error in each iteration, np array (n_wc, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    strong_classifier, wc_errors, upper_bound = None, None, None
-    return strong_classifier, wc_errors, upper_bound
+    n = y.size
+
+    # init weights D_1 so that sum_{y=+1} D = sum_{y=-1} D = 0.5
+    D = np.zeros(n, dtype=float)
+    pos = (y == 1)
+    neg = (y == -1)
+    n_pos = int(np.sum(pos))
+    n_neg = int(np.sum(neg))
+    if n_pos == 0 or n_neg == 0:
+        D.fill(1.0 / n)
+    else:
+        D[pos] = 0.5 / n_pos
+        D[neg] = 0.5 / n_neg
+
+    wc_list = []
+    alpha_list = []
+    wc_errs = []
+    ub_list = []
+
+    ub_prod = 1.0
+    eps_clip = 1e-12
+
+    for _ in range(int(num_steps)):
+        wc, eps = find_best_weak(X, y, D)
+
+        if eps >= 0.5:
+            break
+
+        eps = float(np.clip(eps, eps_clip, 1.0 - eps_clip))
+        alpha = 0.5 * np.log((1.0 - eps) / eps)
+
+        # weak classifier predictions h_t(x_i) = sign(p * (X[k,i] - theta))
+        idx = int(wc['idx'])
+        theta = float(wc['theta'])
+        parity = float(wc['parity'])
+        h = np.sign(parity * (X[idx, :] - theta))
+        h[h == 0] = 1  # keep in {-1, +1}
+
+        # update weights: D_{t+1}(i) ∝ D_t(i) * exp(-alpha_t * y_i * h_t(x_i))
+        D_unn = D * np.exp(-alpha * y * h)
+        Z = float(np.sum(D_unn))
+        D = D_unn / Z
+
+        wc_list.append(wc)
+        alpha_list.append(alpha)
+        wc_errs.append(eps)
+
+        ub_prod *= Z
+        ub_list.append(ub_prod)
+
+    strong_classifier = {
+        'wc': np.array(wc_list, dtype=object),
+        'alpha': np.array(alpha_list, dtype=float),
+    }
+    return strong_classifier, np.array(wc_errs, dtype=float), np.array(ub_list, dtype=float)
 
 
 def adaboost_classify(strong_classifier, X):
@@ -31,9 +83,22 @@ def adaboost_classify(strong_classifier, X):
                                     n - number of data
     :return classif:            classification labels (values -1, 1), np array (n, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    classif = None
-    return classif
+    wcs = strong_classifier["wc"]
+    alpha = np.asarray(strong_classifier["alpha"], dtype=float)
+
+    n = X.shape[1]
+    F = np.zeros(n, dtype=float)
+
+    # sign convention used in these labs: sign(0) -> +1
+    for a, wc in zip(alpha, wcs):
+        idx = int(wc["idx"])
+        theta = float(wc["theta"])
+        parity = int(wc["parity"])
+
+        h = np.where(parity * (X[idx, :] - theta) > 0.0, 1.0, -1.0)
+        F += a * h
+
+    return np.where(F > 0.0, 1, -1)
 
 
 def compute_error(strong_classifier, X, y):
@@ -47,8 +112,29 @@ def compute_error(strong_classifier, X, y):
     :param y:                   testing labels (-1 or 1), np array (n, )
     :return errors:             errors of the strong classifier for all lengths from 1 to T, np array (T, )
     """
-    raise NotImplementedError("You have to implement this function.")
-    errors = None
+    alpha = np.asarray(strong_classifier["alpha"], dtype=float)
+    wc = strong_classifier["wc"]
+    T = alpha.size
+
+    # running sum F_t(x) for all samples
+    F = np.zeros(y.size, dtype=float)
+    errors = np.zeros(T, dtype=float)
+
+    for t in range(T):
+        wct = wc[t]
+        idx = int(wct["idx"])
+        theta = float(wct["theta"])
+        parity = float(wct["parity"])
+
+        h = np.sign(parity * (X[idx, :] - theta))
+        h[h == 0] = 1  # keep in {-1,+1}
+
+        F += alpha[t] * h
+        yhat = np.sign(F)
+        yhat[yhat == 0] = 1
+
+        errors[t] = np.mean(yhat != y)
+
     return errors
 
 
