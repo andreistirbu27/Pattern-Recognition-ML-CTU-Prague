@@ -56,8 +56,7 @@ class Linear(Layer):
         :return:   layer output - np.array (batch_sz, output_dimension)
         """
         self.x = x.copy()
-        raise NotImplementedError("You have to implement this function.")
-        output = None
+        output = x @ self.W + self.b
         return output
 
     def backward(self, dL_wrt_output):
@@ -69,10 +68,11 @@ class Linear(Layer):
                dL_wrt_W - np array (batch_sz, input_dimension, output_dimension)
                dL_wrt_b - np array (batch_sz, 1, output_dimension)
         """
-        raise NotImplementedError("You have to implement this function.")
-        dL_wrt_x = None
-        self.dL_wrt_W = None
-        self.dL_wrt_b = None
+        dL_wrt_x = dL_wrt_output @ self.W.T
+
+        self.dL_wrt_W = self.x[:, :, None] * dL_wrt_output[:, None, :]
+        self.dL_wrt_b = dL_wrt_output[:, None, :]
+
         return dL_wrt_x
 
     def params(self):
@@ -96,8 +96,7 @@ class ReLU(Layer):
         :return:   ReLU activation (same shape as x)
         """
         self.x = x.copy()
-        raise NotImplementedError("You have to implement this function.")
-        output = None
+        output = np.maximum(0, x)
         return output
 
     def backward(self, dL_wrt_output):
@@ -105,8 +104,7 @@ class ReLU(Layer):
         :param dL_wrt_output: gradient of loss wrt layer output (same shape as forward x)
         :return:              gradient of loss wrt layer input (same shape as forward x)
         """
-        raise NotImplementedError("You have to implement this function.")
-        dL_wrt_x = None
+        dL_wrt_x = dL_wrt_output * (self.x > 0)
         return dL_wrt_x
 
 class Sigmoid(Layer):
@@ -122,18 +120,16 @@ class Sigmoid(Layer):
         :param x:  arbitrary shaped np array
         :return:   Logistic sigmoid activation (same shape as x)
         """
-        raise NotImplementedError("You have to implement this function.")
-        output = None
-        return output
+        x_clip = np.clip(x, -50.0, 50.0)  # avoid overflow in exp
+        self.a = 1.0 / (1.0 + np.exp(-x_clip))
+        return self.a
 
     def backward(self, dL_wrt_output):
         """
         :param dL_wrt_output: gradient of loss wrt layer output (same shape as forward x)
         :return:              gradient of loss wrt layer input (same shape as forward x)
         """
-        raise NotImplementedError("You have to implement this function.")
-        dL_wrt_x = None
-        return dL_wrt_x
+        return dL_wrt_output * (self.a * (1.0 - self.a))
 
 
 class SE(Loss):
@@ -152,9 +148,7 @@ class SE(Loss):
         """
         self.x = x.copy()
         self.y = y.copy()
-        raise NotImplementedError("You have to implement this function.")
-        output = None
-        return output
+        return (x - y) ** 2
 
     def backward(self):
         """
@@ -163,9 +157,7 @@ class SE(Loss):
         Note: The second input will be the ground truth label, which is fixed.
               No need to propagate gradient there
         """
-        raise NotImplementedError("You have to implement this function.")
-        dL_wrt_x = None
-        return dL_wrt_x
+        return 2.0 * (self.x - self.y)
 
 
 ################################################################################
@@ -446,7 +438,7 @@ def main():
 
     # Plot epochs
     visualize_data([val_losses, trn_losses], legend=['validation', 'training'],
-                   xlabel='epoch', ylabel='MSE', save_filepath='numpy_nn_training.png')
+                   xlabel='epoch', ylabel='MSE', save_filepath='Graphs & Plots/numpy_nn_training.png')
 
     # TST load best model
     print('Best VAL model loss {:.4f} at epoch #{:d}.'.format(val_losses[best_val_loss_epoch], best_val_loss_epoch))
